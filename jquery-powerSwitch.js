@@ -101,6 +101,32 @@
 					}, params.duration);
 				}
 			};
+			
+			// 以下方法旨在解决动画进行中仍然可以点击的问题
+			if (params.duration && params.animation != "none") {
+				params.isAnimating = true;
+				// 为了简便，不走回调，直接定时器还原点击
+				var durationObj = {
+					"slow": 200,
+					"normal": 400,
+					"fast": 600	
+				}, durationMs = durationObj[params.duration] || params.duration;
+				
+				if (params.direction == "sync") {
+					if (targetHide && targetShow) {
+						durationMs = 800;
+					} else if (targetHide || targetShow) {
+						durationMs = 400;
+					} else {
+						durationMs = 0;	
+					}
+				}
+
+				setTimeout(function() {
+					params.isAnimating = false;	
+				}, durationMs);
+			}			
+			
 			// 因为是万能切换，显然情况就比较复杂
 			// 可以是列表元素动画，也可以是容器元素动画
 			// 容器元素动画又分为两种，scroll和transform(IE6-9 left/top代替)，自动判断
@@ -282,6 +308,9 @@
 		// 最终参数
 		var params = $.extend({}, defaults, options || {});
 		
+		// 动画是否正在进行
+		params.isAnimating = false;
+		
 		// 一些全局类名		
 		$.each(["disabled", "prev", "play", "pause", "next"], function(index, key) {
 			key = $.trim(key);
@@ -414,10 +443,15 @@
 		
 		// 切换的核心，所有的切换都要走这一步
 		// 面向切换面板元素设计的切换方法
-		var funSwitchable = function(indexWill) {
+		var funSwitchable = function(indexWill) {			
+			// 判断是否需要切换
+			if (indexWill == indexSelected) {
+				return;
+			}
 			// 总的切换项目数，每次切换的项目数
 			var eleWillRelative = eleRelatives.slice(indexWill, indexWill + numSwitch);			
 			var eleSelected = null, eleWillSelect = null, eleRelative = null;
+			
 			// 如果是toggle切换
 			if (params.toggle == false) {
 				// 在多对1模式下，我们关心的是触发按钮的临界状态	（disabled）等
@@ -502,7 +536,8 @@
 			
 			if (isMoreToOne == true) {		
 				$(element).bind("click", function() {
-					var indexWill, eleWill;
+					var indexWill, eleWill;				
+					if (params.isAnimating == true) return false;
 					if (params.classDisabled) {
 						if ($(this).attr("disabled")) return false;
 						if (index == 0) {
@@ -541,11 +576,14 @@
 						index? funPlayNext(this): funPlayPrev(this);
 						elePrevOrNext = $(this);
 					}
-					return false;
+					if (element && element.href) return false;
 				});
 			} else if (isOneToMore == true) {
 				$(element).bind("click", function() {
 					var indexWill;
+					// 动画进行，则不能连续执行
+					if (params.isAnimating == true) return false;
+					
 					if (params.number == "auto") {
 						numSwitch = lenRelatives;
 					}	
@@ -561,16 +599,18 @@
 							$(this).addClass(params.classDisabled).attr("disabled", "disabled").removeAttr("title");		
 						}
 					}
-					return false;
+					if (element && element.href) return false;
 				});
 			} else if (params.eventType == "click") {				
 				$(element).bind("click", function() {
+					// 动画进行，则不能连续执行
+					if (params.isAnimating == true) return false;
 					// 设置标志量，根据位置判断方向
 					params.prevOrNext = $(this);
 					// 点击事件 click events
 					funSwitchable.call(this, index);
-					
-					if (this.id !== $(this).attr(params.attribute)) {
+					// 如果不是指向自身，或者带有href属性，阻止默认行为
+					if (this.id !== $(this).attr(params.attribute) && (element && element.href)) {
 						return false;
 					}
 				});
@@ -580,6 +620,7 @@
 				}
 			} else if (/^hover|mouseover$/.test(params.eventType)) {				
 				$(element).hover(function() {
+					if (params.isAnimating == true) return false;
 					params.prevOrNext = $(this);
 					// 鼠标经过 hover events
 					clearTimeout(hoverTimer);
@@ -635,30 +676,34 @@
 				});
 				
 				params.container.append(htmlTempOperate).delegate("a", "click", function() {
+					if (params.isAnimating == true) return false;
 					var type = $(this).attr("data-type"), classType = params["class" + type.slice(0, 1).toUpperCase() + type.slice(1)],
 						indexWill = indexSelected;
 					switch (type) {
 						case "prev": {
 							params.prevOrNext = $(this);
 							funPlayPrev();
-							break	
+							if (params.autoTime) funAutoPlay();
+							break;	
 						}
 						case "play": {
 							funAutoPlay.flagAutoPlay = true;
 							$(this).attr("data-type", "pause").removeClass(classType).addClass(params.classPause);
+
 							funAutoPlay();
-							break	
+							break;	
 						}
 						case "pause": {
 							funAutoPlay.flagAutoPlay = false;
 							$(this).attr("data-type", "play").removeClass(classType).addClass(params.classPlay);
 							funAutoPlay();
-							break	
+							break;	
 						}
 						case "next": {
 							params.prevOrNext = $(this);
 							funPlayNext();
-							break	
+							if (params.autoTime) funAutoPlay();
+							break;	
 						}
 					}
 					
@@ -671,17 +716,20 @@
 				// 自定义按钮容器，选项卡，以及切换面板鼠标经过停止自动播放
 				// 如果容器存在，且是包含关系
 				// 只要绑定容器就可以
-				var arrHoverPlay = [self, eleRelatives, params.container];
-				if (isMoreToOne == true || (document.body.contains && params.container && params.container.get(0).contains(eleRelatives.get(0)))) {
-					arrHoverPlay = [self, params.container];
+				if (params.hoverStop !== false) {
+					var arrHoverPlay = [self, eleRelatives, params.container];
+					if (isMoreToOne == true || (document.body.contains && params.container && params.container.get(0).contains(eleRelatives.get(0)))) {
+						arrHoverPlay = [self, params.container];
+					}
+					$.each(arrHoverPlay, function(index, hoverTarget) {
+						if (hoverTarget) hoverTarget.hover(function(event) {
+							if (event.pageX !== undefined || params.eventType == "click") clearTimeout(autoPlayTimer);
+						}, function(event) {
+							if (event.pageX !== undefined || params.eventType == "click") funAutoPlay();
+						});						
+					});
 				}
-				$.each(arrHoverPlay, function(index, hoverTarget) {
-					if (hoverTarget) hoverTarget.hover(function(event) {
-						if (event.pageX !== undefined || params.eventType == "click") clearTimeout(autoPlayTimer);
-					}, function(event) {
-						if (event.pageX !== undefined || params.eventType == "click") funAutoPlay();
-					});						
-				});
+				
 				funAutoPlay.flagAutoPlay = true;
 				funAutoPlay();
 			}
